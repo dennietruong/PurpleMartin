@@ -1,0 +1,475 @@
+---
+title: "PurpleMartin"
+author: "DennieT"
+date: "2024-03-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(lubridate) 
+library(dplyr)
+library(ggplot2)
+
+library(usmap) #import the package
+```
+
+
+
+Set Directory
+```{r}
+here::i_am("BirdCode.Rmd")
+```
+
+
+Read In Data
+```{r}
+Nest <- read.csv("Nest_data.csv")
+Scout <- read.csv("ScoutArrivalData.csv")
+```
+
+
+Scout Data Manipulation
+```{r}
+#Remove all nonapproved data
+Scout2 <- Scout[which(Scout$Approved=="Y"),]
+Scout2 <- Scout2[which(Scout$PairsLastYear<100),]
+Scout2 <- Scout2[which(Scout$Latitude!=0),]
+Scout2 <- Scout2[which(Scout$Longitude!=0),]
+
+#Get columns for analysis in Scout dataframe
+Scout2 <- Scout2[,c("AdultArrivalDate","CustomerID","Latitude","Longitude","PairsLastYear","JulianAdultArrivalDate")]
+
+
+#Make PairLastYear into integers
+Scout2$PairsLastYear <- as.numeric(Scout2$PairsLastYear)
+#Make Latitude into integers
+Scout2$Latitude <- as.numeric(Scout2$Latitude)
+#Make Longitude into integers
+Scout2$Longitude <- as.numeric(Scout2$Longitude)
+#Make JulianAdultArrivalDate into integers
+Scout2$JulianAdultArrivalDate <- as.numeric(Scout2$JulianAdultArrivalDate)
+
+# Define a function to map each month to a season
+get_season <- function(Month) {
+  if (Month %in% 3:5) {
+    return("Spring")
+  } else if (Month %in% 6:8) {
+    return("Summer")
+  } else if (Month %in% 9:11) {
+    return("Fall")
+  } else {
+    return("Winter")
+  }
+}
+
+# AdultArrivalDate is in the format mm/dd/yyyy
+# Make DateTime 
+Scout2$Datetime <- mdy(paste(Scout2$AdultArrivalDate, sep = " "))
+
+# Create a new column for the month
+Scout2$Month <- month(Scout2$Datetime)
+# Create a new column for the year
+Scout2$Year <- year(Scout2$Datetime)
+# Apply the get_season function to map months to seasons
+Scout2$Season <- sapply(Scout2$Month, get_season)
+
+
+#Remove NA rows
+Scout2 <- na.omit(Scout2)
+
+
+```
+
+
+
+
+Nest Data Manipulation
+```{r}
+#Get columns for analysis in Nest dataframe
+Nest2 <- Nest[,c("CustomerID", "Zip", "EggNumber", "YoungFledged")]
+
+#Get rate of success for fledglings
+Nest2$FledgingSuccess <- Nest2$YoungFledged/Nest2$EggNumber 
+
+#Make Zip code into integers
+Nest2$Zip <- as.integer(Nest2$Zip)
+#Remove NA rows
+Nest2 <- na.omit(Nest2)
+
+#Remove "ZipCode" not 5 digits long
+Nest3 <- Nest2[which(Nest2$Zip>10000 & Nest2$Zip<100000),]
+```
+
+
+
+
+Average of JulianDate of AdultArrival
+```{r}
+# Group year and calculate the mean 
+Scout3 <- Scout2 %>%
+  mutate(Datetime_year = floor_date(Datetime, "year")) %>%
+  group_by(Datetime_year) %>%
+  summarise(JulianAdultArrivalDate_mean = mean(JulianAdultArrivalDate, na.rm = TRUE),)
+
+
+AdultArrivalAvg <- Scout3 %>%
+  ggplot(aes(x=Datetime_year, y=JulianAdultArrivalDate_mean))+
+  ylab("Average Adult Arrival Date (Julian)") + 
+  xlab("Year") +
+  geom_line(size=1) +
+  xlim(as.Date("2013-01-01"), as.Date("2023-01-01"))
+```
+
+
+
+Average of PairsLastYear 
+```{r}
+Data2020s <- dplyr::filter(Scout2, Year >= 2000, PairsLastYear <2000)
+
+# Group year and calculate the mean 
+Scout4 <- Data2020s %>%
+  mutate(Datetime_month = floor_date(Datetime, "month")) %>%
+  group_by(Datetime_month) %>%
+  summarise(PairsLastMonth_mean = mean(PairsLastYear, na.rm = TRUE),)
+
+
+PairsLastYearAvg <- Scout4 %>%
+  ggplot(aes(x=Datetime_month, y=PairsLastMonth_mean))+
+  ylab("Average of pairs of Purple Martin seen last year") + 
+  xlab("Year") +
+  geom_line(size=1) +
+  xlim(as.Date("2000-01-01"), as.Date("2023-01-01"))
+
+PairsLastYearAvg
+```
+
+
+Pairs of Purple Martin seen last year Graph
+```{r}
+TimelinePairLastYr <- Data2020s %>%
+  ggplot(aes(x=Datetime, y=PairsLastYear, color = factor(Season)))+
+  ylab("Pairs of Purple Martin Last Year") + 
+  xlab("Date") + 
+  geom_point(size=1) +
+  labs(color = "Season")
+
+TimelinePairLastYr
+```
+
+
+
+
+
+
+
+Plot, point stack on top of each other
+```{r}
+HeatMap <- dplyr::filter(Scout2, Longitude < -50, PairsLastYear <100)
+p <- ggplot(HeatMap, aes(x = Longitude, y = Latitude, color = PairsLastYear)) +
+  geom_point()   # Scatter plot
+
+p
+
+```
+
+
+
+Map 1
+Map of arrival date
+https://jtr13.github.io/cc19/
+```{r}
+library(usmap)
+library(ggplot2)
+library(grid)
+library(sf)
+
+# Filter the data
+HeatMap2023 <- dplyr::filter(Scout2, Longitude < -50, PairsLastYear < 100, Year == 2023)
+
+# Convert to sf object
+HeatMap2023_sf <- st_as_sf(HeatMap2023, coords = c("Longitude", "Latitude"), crs = 4326)
+
+# Plot US map and overlay scatter plot
+us_map <- plot_usmap(exclude = c("HI", "AK")) + 
+  geom_sf(data = HeatMap2023_sf, aes(color = Season)) +
+  scale_color_manual(values = c("Spring" = "darkgreen", "Summer" = "red", "Winter" = "blue")) +  # Manually set colors for seasons
+  #coord_sf(xlim = c(-125, -65), ylim = c(25, 50)) +  # Limit map extent
+  labs(color = "Season") +  # Label the color legend
+  ggtitle("Scout Locations in 2023") 
+
+
+# Show the plot
+print(us_map)
+```
+
+Map 2
+Map of arrival date
+```{r}
+# Filter the data
+HeatMap2023 <- dplyr::filter(Scout2, Longitude < -50, PairsLastYear < 100, Year == 2023)
+
+# Convert to sf object
+HeatMap2023_sf <- st_as_sf(HeatMap2023, coords = c("Longitude", "Latitude"), crs = 4326)
+
+# Plot US map and overlay scatter plot
+us_map <- plot_usmap(exclude = c("HI", "AK")) + 
+  geom_sf(data = HeatMap2023_sf, aes(color = Month)) +
+  #scale_color_manual(values = c("Spring" = "darkgreen", "Summer" = "red", "Winter" = "blue")) +  # Manually set colors for seasons
+  #coord_sf(xlim = c(-125, -65), ylim = c(25, 50)) +  # Limit map extent
+  scale_color_gradient(name = "Month", low = "orange", high = "black") + # Adjust the color gradient
+  labs(color = "Month") +  # Label the color legend
+  ggtitle("Scout Locations in 2023") 
+
+
+# Show the plot
+print(us_map)
+```
+
+
+
+Get image of each year since 2013 to 2023 of Arrival Date Map
+```{r}
+# Define the path to the download folder
+download_folder <- "C:/Users/denni/Downloads/Spring2024/BI334LAB/BirdProject"  # Adjust this path as needed
+
+
+# Filter the data for each year from 2013 to 2023
+plots <- lapply(2013:2023, function(year) {
+  # Filter the data for the current year
+  HeatMap_year <- filter(Scout2, Longitude < -50, PairsLastYear < 100, Year == year)
+  
+  # Convert to sf object
+  HeatMap_year_sf <- st_as_sf(HeatMap_year, coords = c("Longitude", "Latitude"), crs = 4326)
+  
+  # Plot US map for the current year
+  plot <- plot_usmap(exclude = c("HI", "AK"), expand = 0.9) + 
+    geom_sf(data = HeatMap_year_sf, aes(color = Month)) +
+    scale_color_gradient(name = "Month", low = "orange", high = "black", limits = c(1, 12)) +
+    labs(color = "Month") +
+    ggtitle(paste("Scout Locations in", year)) +
+    theme_minimal() +  # Set theme to minimal with white background
+    theme(plot.background = element_rect(fill = "white"),
+          aspect.ratio = 3/4)  # Set plot background to white
+    
+  
+  # Define the file path for saving the plot
+  file_path <- paste0(download_folder, "Scout_Locations_", year, ".png")
+  
+  # Save the plot as an image file
+  ggsave(file_path, plot, width = 10, height = 7, dpi = 300)
+  
+  # Return the plot object
+  return(plot)
+})
+
+# Show the plots
+plots
+
+```
+
+
+
+WEBSITE:
+https://conservancy.umn.edu/bitstream/handle/11299/220339/time-maps-tutorial-v2.html?sequence=3#:~:text=Once%20the%20data%20is%20in%20the%20proper%20format%2C,data%20thereby%20showing%20how%20it%20changes%20over%20time.
+
+Animation of Adult Arrival Date from 2013 to 2023 based on Months
+```{r}
+library(ggplot2)
+library(gganimate)
+library(gifski)
+
+# Filter the data
+HeatMap2013_2023<- dplyr::filter(Scout2, Longitude < -50, PairsLastYear < 100, Year >= 2000)
+
+country_info <- map_data("state")
+
+base_map <- ggplot(data = country_info, mapping = aes(x = long, y = lat, group = group)) +
+ geom_polygon(color = "black", fill = "white") +
+  coord_quickmap() +
+  scale_color_gradient(low = "orange", high = "black") +
+  theme_void() 
+
+
+map_with_data <- base_map +
+  geom_point(data = HeatMap2013_2023, aes(x = Longitude, y = Latitude, group=AdultArrivalDate, color=Month))
+map_with_data
+
+
+
+map_with_animation <- map_with_data +
+  transition_time(Year) +
+  ggtitle('Year: {frame_time}',
+          subtitle = 'Frame {frame} of {nframes}')
+num_years <- max(HeatMap2013_2023$Year) - min(HeatMap2013_2023$Year) + 1
+
+animate(map_with_animation, nframes = num_years, fps = 3, renderer=gifski_renderer("MonthArrivalDate.gif"))
+
+```
+
+
+
+Animation of Adult Arrival Date from 2013 to 2023 based on Seasons
+```{r}
+library(ggplot2)
+library(gganimate)
+library(gifski)
+
+# Filter the data
+HeatMap2013_2023<- dplyr::filter(Scout2, Longitude < -50, PairsLastYear < 100, Year >= 2000)
+
+country_info <- map_data("state")
+
+base_map2 <- ggplot(data = country_info, mapping = aes(x = long, y = lat, group = group)) +
+ geom_polygon(color = "black", fill = "white") +
+  coord_quickmap() +
+  scale_color_manual(values = c("Spring" = "darkgreen", "Summer" = "red", "Winter" = "blue")) +  # Manually set
+  theme_void() 
+
+
+map_with_data2 <- base_map2 +
+  geom_point(data = HeatMap2013_2023, aes(x = Longitude, y = Latitude, group=AdultArrivalDate, color=Season))
+map_with_data2
+
+
+
+map_with_animation2 <- map_with_data2 +
+  transition_time(Year) +
+  ggtitle('Year: {frame_time}',
+          subtitle = 'Frame {frame} of {nframes}')
+num_years <- max(HeatMap2013_2023$Year) - min(HeatMap2013_2023$Year) + 1
+
+animate(map_with_animation2, nframes = num_years, fps = 3, renderer=gifski_renderer("SeasonArrivalDate.gif"))
+```
+
+
+
+Map 1
+Map of Pairs Last Year
+```{r}
+# Filter the data
+HeatMap2023 <- dplyr::filter(Scout2, Longitude < -50, PairsLastYear < 100, Year == 2023)
+
+# Convert to sf object
+HeatMap2023_sf <- st_as_sf(HeatMap2023, coords = c("Longitude", "Latitude"), crs = 4326)
+
+# Plot US map and overlay scatter plot
+us_map2 <- plot_usmap(exclude = c("HI", "AK")) + 
+  geom_sf(data = HeatMap2023_sf, aes(color = PairsLastYear)) +
+  #scale_color_manual(values = c("Spring" = "darkgreen", "Summer" = "red", "Winter" = "blue")) +  # Manually set colors for seasons
+  #coord_sf(xlim = c(-125, -65), ylim = c(25, 50)) +  # Limit map extent
+  scale_color_gradient(name = "Pairs of Purple Martin", low = "skyblue1", high = "black") + # Adjust the color gradient
+  labs(color = "Month") +  # Label the color legend
+  ggtitle("Pairs of Purple Martin in 2022") 
+
+
+# Show the plot
+print(us_map2)
+
+# Save the plot as a PNG file
+ggsave("us_map2.png", plot = us_map2)
+```
+
+Graph of PairLastYear v. Latitude
+```{r}
+PairLastYear2022 <- HeatMap2023 %>%
+  ggplot(aes(x=Latitude, y=PairsLastYear, color = factor(Season)))+
+  ylab("Pairs of Purple Martin in 2022") + 
+  xlab("Latitude") + 
+  geom_point(size=1) +
+  labs(color = "Season")
+
+PairLastYear2022
+```
+
+
+
+
+3D Scatterplot
+```{r}
+library(readxl)
+library(rgl)
+
+# Open 3D device
+open3d()
+
+# Create the 3D scatter plot
+plot3d(HeatMap$Longitude, HeatMap$Latitude, HeatMap$PairsLastYear, 
+       xlab = "Longitude", ylab = "Latitude", zlab = "Pairs Last Year",
+       col = "blue", size = 2)
+
+# Add grid
+grid3d()
+
+# Add axes
+axes3d()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+IGNORE EVERYTHING BELOW (Unless you can get zip code to lat/long to work)
+
+Zip Code to Lat Long
+```{r}
+#Change ZipCode to Lat/Long
+library(zipcodeR)
+geocode_zip("04901")
+
+
+library(ggmap)
+register_google(key = "https://api.covidactnow.org/v2/county/")
+# Let's say your zip codes are in a column named 'zip_codes' in a dataframe named 'data'
+Nest3$address <- paste(Nest3$Zip, "USA", sep = ", ")
+geo_data <- geocode(Nest3$address)
+
+# Check if there are any missing values in the geocoding results
+missing <- sum(is.na(geo_data))
+if (missing > 0) {
+  print(paste("Warning: ", missing, " locations could not be geocoded."))
+}
+
+# Append latitude and longitude to the original dataframe
+data$latitude <- geo_data$lat
+data$longitude <- geo_data$lon
+
+```
+
+
+Combine both dataframe
+```{r}
+Nest2$CustomerID <- as.integer(Nest2$CustomerID)
+
+
+MetaData <- Scout2 %>%
+  full_join(Nest2)
+
+MetaData2 <- na.omit(MetaData)
+
+#save to csv
+write.csv(MetaData2,"MetaData.csv", row.names=FALSE)
+```
+
+
+
+Get rate of success for fledglings
+```{r}
+MetaData2$FledgingSuccess <- MetaData2$YoungFledged/MetaData2$EggNumber 
+```
+
